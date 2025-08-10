@@ -235,8 +235,8 @@ fi
     git clone https://github.com/zsh-users/zsh-autosuggestions "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions"
 [ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" ] &&
     git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting"
-sed -i 's/^ZSH_THEME=.*/ZSH_THEME="darkblood"/' ~/.zshrc
-sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' ~/.zshrc
+sed -i "s|^ZSH_THEME=.*|ZSH_THEME=\"darkblood\"|" ~/.zshrc
+sed -i "s|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|" ~/.zshrc
 
 ############################
 # Done
