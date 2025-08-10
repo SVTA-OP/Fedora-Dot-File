@@ -2,6 +2,7 @@
 set -e
 
 echo "=== Fedora 42 Post-install Script ==="
+echo "NOTE: This script requires sudo privileges. Run with 'sudo ./post-install.sh' or as root."
 ERROR_LOG="errors.txt"
 : > "$ERROR_LOG"
 
@@ -10,7 +11,8 @@ check_prerequisites() {
     echo "Checking prerequisites..."
     # Check for sudo/root privileges
     if [ "$(id -u)" -ne 0 ] && ! groups | grep -q sudo; then
-        echo "Error: Script must be run with sudo or as root" >>"$ERROR_LOG"
+        echo "Error: This script requires sudo or root privileges." | tee -a "$ERROR_LOG"
+        echo "Please run the script with 'sudo ./post-install.sh' or as root user." | tee -a "$ERROR_LOG"
         exit 1
     fi
     # Check for Fedora 42
@@ -25,8 +27,12 @@ check_prerequisites() {
 configure_dnf() {
     echo "Configuring DNF..."
     if ! grep -q "max_parallel_downloads=10" /etc/dnf/dnf.conf || ! grep -q "fastestmirror=1" /etc/dnf/dnf.conf; then
-        sudo sed -i -e '/^max_parallel_downloads/d' -e '/^fastestmirror/d' /etc/dnf/dnf.conf
-        echo -e "max_parallel_downloads=10\nfastestmirror=1" | sudo tee -a /etc/dnf/dnf.conf >/dev/null || echo "Error: Failed to configure DNF" >>"$ERROR_LOG"
+        if [ -f /etc/dnf/dnf.conf ]; then
+            sudo sed -i -e '/^max_parallel_downloads/d' -e '/^fastestmirror/d' /etc/dnf/dnf.conf || echo "Error: Failed to configure DNF settings" >>"$ERROR_LOG"
+            echo -e "max_parallel_downloads=10\nfastestmirror=1" | sudo tee -a /etc/dnf/dnf.conf >/dev/null || echo "Error: Failed to append DNF settings" >>"$ERROR_LOG"
+        else
+            echo "Error: /etc/dnf/dnf.conf not found" >>"$ERROR_LOG"
+        fi
     fi
     echo "[OK] DNF configured."
 }
@@ -307,8 +313,13 @@ configure_zsh() {
     if [ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" ]; then
         git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" || echo "Error: Failed to install zsh-syntax-highlighting" >>"$ERROR_LOG"
     fi
-    sed -i "s|^ZSH_THEME=.*|ZSH_THEME=\"darkblood\"|" ~/.zshrc || echo "Error: Failed to set Zsh theme" >>"$ERROR_LOG"
-    sed -i "s|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|" ~/.zshrc || echo "Error: Failed to set Zsh plugins" >>"$ERROR_LOG"
+    if [ -f "$HOME/.zshrc" ]; then
+        sed -i "s#^ZSH_THEME=.*#ZSH_THEME=\"darkblood\"#" "$HOME/.zshrc" || echo "Error: Failed to set Zsh theme" >>"$ERROR_LOG"
+        sed -i "s#^plugins=.*#plugins=(git zsh-autosuggestions zsh-syntax-highlighting)#" "$HOME/.zshrc" || echo "Error: Failed to set Zsh plugins" >>"$ERROR_LOG"
+    else
+        echo "ZSH_THEME=\"darkblood\"" >> "$HOME/.zshrc" || echo "Error: Failed to create .zshrc with theme" >>"$ERROR_LOG"
+        echo "plugins=(git zsh-autosuggestions zsh-syntax-highlighting)" >> "$HOME/.zshrc" || echo "Error: Failed to add plugins to .zshrc" >>"$ERROR_LOG"
+    fi
     echo "[OK] Zsh and Oh My Zsh configured."
 }
 
