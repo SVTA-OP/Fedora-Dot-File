@@ -23,6 +23,14 @@ check_prerequisites() {
     echo "[OK] Prerequisites verified."
 }
 
+# Add Copr for scrcpy
+enable_copr_scrcpy() {
+    echo "Enabling Copr for scrcpy..."
+    sudo dnf install -y dnf-plugins-core || echo "Error: Failed to install dnf-plugins-core" >>"$ERROR_LOG"
+    sudo dnf copr enable -y zeno/scrcpy || echo "Error: Failed to enable Copr for scrcpy" >>"$ERROR_LOG"
+    echo "[OK] Copr for scrcpy enabled."
+}
+
 # 1. Configure DNF
 configure_dnf() {
     echo "Configuring DNF..."
@@ -80,8 +88,24 @@ install_media_codecs() {
 # 5. OpenH264
 install_openh264() {
     echo "Installing OpenH264..."
-    sudo dnf install -y openh264 gstreamer1-plugin-openh264 mozilla-openh264 || echo "Error: Failed to install OpenH264" >>"$ERROR_LOG"
-    sudo dnf config-manager --set-enabled fedora-cisco-openh264 || echo "Error: Failed to enable OpenH264 repo" >>"$ERROR_LOG"
+    repo_file="/etc/yum.repos.d/fedora-cisco-openh264.repo"
+    if [ ! -f "$repo_file" ]; then
+        echo "Adding fedora-cisco-openh264 repo..."
+        sudo sh -c "echo '[fedora-cisco-openh264]' > $repo_file" || echo "Error: Failed to create OpenH264 repo file" >>"$ERROR_LOG"
+        sudo sh -c "echo 'name=Fedora \$releasever openh264 (From Cisco)' >> $repo_file" || echo "Error: Failed to add name to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'baseurl=https://codecs.fedoraproject.org/openh264/\$releasever/\$basearch/' >> $repo_file" || echo "Error: Failed to add baseurl to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'enabled=1' >> $repo_file" || echo "Error: Failed to enable OpenH264 repo in file" >>"$ERROR_LOG"
+        sudo sh -c "echo 'metadata_expire=14' >> $repo_file" || echo "Error: Failed to add metadata_expire to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'type=rpm' >> $repo_file" || echo "Error: Failed to add type to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'skip_if_unavailable=False' >> $repo_file" || echo "Error: Failed to add skip_if_unavailable to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'gpgcheck=1' >> $repo_file" || echo "Error: Failed to add gpgcheck to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'repo_gpgcheck=0' >> $repo_file" || echo "Error: Failed to add repo_gpgcheck to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-\$releasever-\$basearch' >> $repo_file" || echo "Error: Failed to add gpgkey to OpenH264 repo" >>"$ERROR_LOG"
+        sudo sh -c "echo 'enabled_metadata=1' >> $repo_file" || echo "Error: Failed to add enabled_metadata to OpenH264 repo" >>"$ERROR_LOG"
+    else
+        sudo dnf config-manager --set-enabled fedora-cisco-openh264 || echo "Error: Failed to enable OpenH264 repo" >>"$ERROR_LOG"
+    fi
+    sudo dnf install -y openh264 gstreamer1-plugin-openh264 mozilla-openh264 || echo "Error: Failed to install OpenH264 packages" >>"$ERROR_LOG"
     echo "[OK] OpenH264 installed."
 }
 
@@ -107,8 +131,10 @@ setup_flathub() {
 # 8. Firefox removal
 remove_firefox() {
     echo "Removing default Firefox..."
-    rpm -q firefox &>/dev/null && sudo dnf -y remove firefox || echo "Error: Failed to remove Firefox" >>"$ERROR_LOG"
-    echo "[OK] Firefox removed."
+    if rpm -q firefox &>/dev/null; then
+        sudo dnf -y remove firefox || echo "Error: Failed to remove Firefox" >>"$ERROR_LOG"
+    fi
+    echo "[OK] Firefox removed or not present."
 }
 
 # 9. VS Code (Microsoft repo)
@@ -174,11 +200,11 @@ install_applications() {
         "android-tools;"
         "gnome-extensions-app;"
         "git;"
-        "mission-center;"
+        "mission-center;io.missioncenter.MissionCenter"
         "zsh;"
         "deja-dup;org.gnome.DejaDup"
         "gnome-tweaks;"
-        "adw-gtk3;"
+        "adw-gtk3-theme;"
     )
     for entry in "${apps[@]}"; do
         IFS=";" read -r pkg flathub_id <<<"$entry"
@@ -210,7 +236,6 @@ install_gnome_extensions() {
         "advanced-alt-tabi@G-dH.github.com"
         "AlphabeticalAppGrid@SofianGoudes.github.com"
         "alt-tab-current-monitor@esauvisky.github.io"
-        "appindicatorsupport@rgcjonas.gmail.com"
         "arch-update@RaphaelRochet"
         "aromenu@arcmenu.com"
         "Battery-Health-Charging@imaniacx.github.com"
@@ -220,7 +245,7 @@ install_gnome_extensions() {
         "cloudflare-warp-toggle@khaled.is-a.dev"
         "monitor-brightness-volume@allin.nemul"
         "dash-to-dock@micxgx.gmail.com"
-        "fullscreen-avoider@noobsal.github.com"
+        "fullscreen-avoider@noobsai.github.com"
         "gsconnect@andyholmes.github.io"
         "gtk4-ding@smedius.gitlab.com"
         "just-perfection-desktop@just-perfection"
@@ -235,6 +260,18 @@ install_gnome_extensions() {
     )
     install_gnome_extension() {
         local uuid="$1"
+        if [ "$uuid" == "appindicatorsupport@rgcjonas.gmail.com" ]; then
+            # Special case for appindicator - install from GitHub
+            if ! gnome-extensions info "$uuid" &>/dev/null; then
+                git clone https://github.com/ubuntu/gnome-shell-extension-appindicator.git /tmp/appindicator || echo "Error: Failed to clone appindicator extension" >>"$ERROR_LOG"
+                cd /tmp/appindicator
+                make install || echo "Error: Failed to make install appindicator extension" >>"$ERROR_LOG"
+                cd -
+                rm -rf /tmp/appindicator || echo "Error: Failed to clean up appindicator temp files" >>"$ERROR_LOG"
+                gnome-extensions enable "$uuid" || echo "Error: Failed to enable $uuid" >>"$ERROR_LOG"
+            fi
+            return
+        fi
         ext_id=$(curl -s "https://extensions.gnome.org/extension-query/?search=${uuid%%@*}" | grep -o "\"pk\": *[0-9]*" | head -n1 | tr -dc '0-9')
         if [ -z "$ext_id" ]; then
             echo "Error: No ID found for $uuid" >>"$ERROR_LOG"
@@ -273,7 +310,11 @@ configure_shortcuts() {
     for k in "${!keys[@]}"; do
         path="$base/$k/"
         if [[ "$current_keys" != *"$path"* ]]; then
-            current_keys=$(echo "$current_keys" | sed "s/]$/, '$path']/")
+            if [ "$current_keys" == "[]" ]; then
+                current_keys="['$path']"
+            else
+                current_keys="${current_keys%]} , '$path']"
+            fi
         fi
         IFS="|" read -r combo cmd <<< "${keys[$k]}"
         gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" name "$k" || echo "Error: Failed to set name for $k shortcut" >>"$ERROR_LOG"
@@ -287,8 +328,9 @@ configure_shortcuts() {
 # 17. Spicetify for Spotify Flatpak
 configure_spicetify() {
     echo "Configuring Spicetify for Spotify..."
+    sudo dnf install -y nodejs || echo "Error: Failed to install nodejs" >>"$ERROR_LOG"
     if ! command -v spicetify &>/dev/null; then
-        sudo npm install -g spicetify-cli || echo "Error: Failed to install Spicetify (ensure npm is installed)" >>"$ERROR_LOG"
+        sudo npm install -g spicetify-cli || echo "Error: Failed to install Spicetify" >>"$ERROR_LOG"
     fi
     if command -v spicetify &>/dev/null; then
         spicetify config current_user_modify true || echo "Error: Failed to set Spicetify user modify" >>"$ERROR_LOG"
@@ -339,6 +381,7 @@ check_prerequisites
 configure_dnf
 install_rpm_fusion
 upgrade_core
+enable_copr_scrcpy
 install_media_codecs
 install_openh264
 configure_system
