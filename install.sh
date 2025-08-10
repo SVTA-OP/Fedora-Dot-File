@@ -21,8 +21,7 @@ fi
 
 ## --- 3. Enable Terra repo ---
 if ! rpm -q terra-release &>/dev/null; then
-    sudo dnf install -y --nogpgcheck \
-        --repofrompath 'terra,https://repos.fyralabs.com/terra$(rpm -E %fedora)' terra-release
+    sudo dnf install --nogpgcheck --repofrompath 'terra,https://repos.fyralabs.com/terra$releasever' terra-release
 fi
 
 ## --- 4. AppStream & Core Group ---
