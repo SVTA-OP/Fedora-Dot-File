@@ -78,7 +78,7 @@ done
 ## --- 12. Install Brave browser (correct way) ---
 if ! command -v brave-browser &>/dev/null; then
     sudo dnf install -y dnf-plugins-core
-    sudo dnf config-manager --addrepo=https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo
+    # sudo dnf config-manager --addrepo=https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo
     sudo rpm --import https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
     sudo dnf install -y brave-browser
 else
@@ -88,7 +88,7 @@ fi
 ## --- 13. Packages (DNF first, then Flatpak if available) ---
 dnf_or_flatpak_pkgs=(
     btop
-    cloudflare-warp
+    # cloudflare-warp
     easy-effects
     flatseal
     filelight
@@ -101,7 +101,7 @@ dnf_or_flatpak_pkgs=(
     pinta
     scrcpy
     android-tools
-    protonvpn
+    # protonvpn
     gnome-extensions-app
     git
     code
