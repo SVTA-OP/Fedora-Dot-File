@@ -2,244 +2,347 @@
 set -e
 
 echo "=== Fedora 42 Post-install Script ==="
-
 ERROR_LOG="errors.txt"
 : > "$ERROR_LOG"
 
-############################
+# Input Validation
+check_prerequisites() {
+    echo "Checking prerequisites..."
+    # Check for sudo/root privileges
+    if [ "$(id -u)" -ne 0 ] && ! groups | grep -q sudo; then
+        echo "Error: Script must be run with sudo or as root" >>"$ERROR_LOG"
+        exit 1
+    fi
+    # Check for Fedora 42
+    if ! grep -q "Fedora release 42" /etc/fedora-release; then
+        echo "Error: This script is designed for Fedora 42 only" >>"$ERROR_LOG"
+        exit 1
+    fi
+    echo "[OK] Prerequisites verified."
+}
+
 # 1. Configure DNF
-############################
-if ! grep -q "max_parallel_downloads=10" /etc/dnf/dnf.conf || ! grep -q "fastestmirror=1" /etc/dnf/dnf.conf; then
-    echo "Updating /etc/dnf/dnf.conf..."
-    sudo sed -i -e '/^max_parallel_downloads/d' -e '/^fastestmirror/d' /etc/dnf/dnf.conf
-    echo -e "max_parallel_downloads=10\nfastestmirror=1" | sudo tee -a /etc/dnf/dnf.conf >/dev/null
-fi
+configure_dnf() {
+    echo "Configuring DNF..."
+    if ! grep -q "max_parallel_downloads=10" /etc/dnf/dnf.conf || ! grep -q "fastestmirror=1" /etc/dnf/dnf.conf; then
+        sudo sed -i -e '/^max_parallel_downloads/d' -e '/^fastestmirror/d' /etc/dnf/dnf.conf
+        echo -e "max_parallel_downloads=10\nfastestmirror=1" | sudo tee -a /etc/dnf/dnf.conf >/dev/null || echo "Error: Failed to configure DNF" >>"$ERROR_LOG"
+    fi
+    echo "[OK] DNF configured."
+}
 
-############################
-# 2. Enable RPM Fusion
-############################
-if ! rpm -q rpmfusion-free-release &>/dev/null || ! rpm -q rpmfusion-nonfree-release &>/dev/null; then
-    sudo dnf install -y \
-      https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-      https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
-fi
+# 2. RPM Fusion
+install_rpm_fusion() {
+    echo "Installing RPM Fusion..."
+    if ! rpm -q rpmfusion-free-release &>/dev/null || ! rpm -q rpmfusion-nonfree-release &>/dev/null; then
+        sudo dnf install -y \
+            https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm || echo "Error: Failed to install RPM Fusion" >>"$ERROR_LOG"
+    fi
+    echo "[OK] RPM Fusion installed."
+}
 
-############################
-# 3. AppStream & Core Group
-############################
-sudo dnf group upgrade -y core
-sudo dnf4 group install -y core
+# 3. AppStream & Core
+upgrade_core() {
+    echo "Upgrading core packages..."
+    sudo dnf group upgrade -y core || echo "Error: Failed to upgrade core group" >>"$ERROR_LOG"
+    sudo dnf group install -y core || echo "Error: Failed to install core group" >>"$ERROR_LOG"
+    echo "[OK] Core packages upgraded."
+}
 
-############################
-# 4. Media Codecs
-############################
-sudo dnf4 group install -y multimedia || echo "Error: multimedia group" >>"$ERROR_LOG"
-sudo dnf swap -y 'ffmpeg-free' 'ffmpeg' --allowerasing || echo "Error: ffmpeg swap" >>"$ERROR_LOG"
-sudo dnf upgrade -y @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin || echo "Error: multimedia upgrade" >>"$ERROR_LOG"
-sudo dnf group install -y sound-and-video || echo "Error: sound-and-video" >>"$ERROR_LOG"
+# 4. Media Codecs & HW Video Accel
+install_media_codecs() {
+    echo "Installing media codecs and hardware acceleration..."
+    sudo dnf group install -y multimedia || echo "Error: Failed to install multimedia group" >>"$ERROR_LOG"
+    sudo dnf swap -y 'ffmpeg-free' 'ffmpeg' --allowerasing || echo "Error: Failed to swap ffmpeg" >>"$ERROR_LOG"
+    sudo dnf upgrade -y @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin || echo "Error: Failed to upgrade multimedia" >>"$ERROR_LOG"
+    sudo dnf group install -y sound-and-video || echo "Error: Failed to install sound-and-video group" >>"$ERROR_LOG"
+    sudo dnf install -y ffmpeg-libs libva libva-utils || echo "Error: Failed to install media libraries" >>"$ERROR_LOG"
+    cpu_vendor=$(lscpu | grep 'Vendor ID' | awk '{print $3}')
+    if [[ "$cpu_vendor" == "GenuineIntel" ]]; then
+        sudo dnf swap -y libva-intel-media-driver intel-media-driver --allowerasing || echo "Error: Failed to install Intel drivers" >>"$ERROR_LOG"
+        sudo dnf install -y libva-intel-driver || echo "Error: Failed to install Intel legacy driver" >>"$ERROR_LOG"
+    elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
+        sudo dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld || echo "Error: Failed to swap AMD VA drivers" >>"$ERROR_LOG"
+        sudo dnf swap -y mesa-vdpau-drivers mesa-vdpau-drivers-freeworld || echo "Error: Failed to swap AMD VDPAU drivers" >>"$ERROR_LOG"
+        sudo dnf swap -y mesa-va-drivers.i686 mesa-va-drivers-freeworld.i686 || echo "Error: Failed to swap AMD VA drivers (i686)" >>"$ERROR_LOG"
+        sudo dnf swap -y mesa-vdpau-drivers.i686 mesa-vdpau-drivers-freeworld.i686 || echo "Error: Failed to swap AMD VDPAU drivers (i686)" >>"$ERROR_LOG"
+    fi
+    echo "[OK] Media codecs and hardware acceleration installed."
+}
 
-############################
-# 5. Hardware Video Acceleration
-############################
-sudo dnf install -y ffmpeg-libs libva libva-utils || echo "Error: VAAPI libs" >>"$ERROR_LOG"
-cpu_vendor=$(lscpu | grep 'Vendor ID' | awk '{print $3}')
-if [[ "$cpu_vendor" == "GenuineIntel" ]]; then
-    sudo dnf swap -y libva-intel-media-driver intel-media-driver --allowerasing || echo "Error: intel driver swap" >>"$ERROR_LOG"
-    sudo dnf install -y libva-intel-driver || echo "Error: intel VA driver" >>"$ERROR_LOG"
-elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
-    sudo dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld || true
-    sudo dnf swap -y mesa-vdpau-drivers mesa-vdpau-drivers-freeworld || true
-    sudo dnf swap -y mesa-va-drivers.i686 mesa-va-drivers-freeworld.i686 || true
-    sudo dnf swap -y mesa-vdpau-drivers.i686 mesa-vdpau-drivers-freeworld.i686 || true
-fi
+# 5. OpenH264
+install_openh264() {
+    echo "Installing OpenH264..."
+    sudo dnf install -y openh264 gstreamer1-plugin-openh264 mozilla-openh264 || echo "Error: Failed to install OpenH264" >>"$ERROR_LOG"
+    sudo dnf config-manager --set-enabled fedora-cisco-openh264 || echo "Error: Failed to enable OpenH264 repo" >>"$ERROR_LOG"
+    echo "[OK] OpenH264 installed."
+}
 
-############################
-# 6. OpenH264 for Firefox
-############################
-sudo dnf install -y openh264 gstreamer1-plugin-openh264 mozilla-openh264 || echo "Error: openh264" >>"$ERROR_LOG"
-sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1 || true
+# 6. Hostname, services, update
+configure_system() {
+    echo "Configuring system settings..."
+    sudo hostnamectl set-hostname vivobook-s14-m5406w || echo "Error: Failed to set hostname" >>"$ERROR_LOG"
+    sudo systemctl disable NetworkManager-wait-online.service || echo "Error: Failed to disable NetworkManager-wait-online" >>"$ERROR_LOG"
+    sudo rm -f /etc/xdg/autostart/org.gnome.Software.desktop || echo "Error: Failed to remove GNOME Software autostart" >>"$ERROR_LOG"
+    sudo dnf -y update || echo "Error: Failed to update system" >>"$ERROR_LOG"
+    echo "[OK] System settings configured."
+}
 
-############################
-# 7. Hostname & system tweaks
-############################
-sudo hostnamectl set-hostname vivobook-s14-m5406w
-sudo systemctl disable NetworkManager-wait-online.service || true
-sudo rm -f /etc/xdg/autostart/org.gnome.Software.desktop || true
+# 7. Flathub
+setup_flathub() {
+    echo "Setting up Flathub..."
+    if ! flatpak remote-list | grep -q flathub; then
+        flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || echo "Error: Failed to add Flathub" >>"$ERROR_LOG"
+    fi
+    echo "[OK] Flathub set up."
+}
 
-############################
-# 8. System Update
-############################
-sudo dnf -y update
+# 8. Firefox removal
+remove_firefox() {
+    echo "Removing default Firefox..."
+    rpm -q firefox &>/dev/null && sudo dnf -y remove firefox || echo "Error: Failed to remove Firefox" >>"$ERROR_LOG"
+    echo "[OK] Firefox removed."
+}
 
-############################
-# 9. Enable Flathub
-############################
-if ! flatpak remote-list | grep -q flathub; then
-    flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-fi
+# 9. VS Code (Microsoft repo)
+install_vscode() {
+    echo "Installing Visual Studio Code..."
+    if ! command -v code &>/dev/null; then
+        sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc || echo "Error: Failed to import Microsoft key" >>"$ERROR_LOG"
+        sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo' || echo "Error: Failed to add VS Code repo" >>"$ERROR_LOG"
+        sudo dnf install -y code || echo "Error: Failed to install VS Code" >>"$ERROR_LOG"
+    fi
+    echo "[OK] VS Code installed."
+}
 
-############################
-# 10. Remove RPM Firefox
-############################
-if rpm -q firefox &>/dev/null; then
-    sudo dnf -y remove firefox
-fi
+# 10. Brave browser
+install_brave() {
+    echo "Installing Brave browser..."
+    curl -fsS https://dl.brave.com/install.sh | sh || echo "Error: Failed to install Brave" >>"$ERROR_LOG"
+    echo "[OK] Brave installed."
+}
 
-############################
-# 11. Install official VS Code
-############################
-if ! command -v code &>/dev/null; then
-    sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-    sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo'
-    sudo dnf install -y code || echo "Error: installing VS Code" >>"$ERROR_LOG"
-fi
+# 11. Essential Flatpak apps
+install_flatpak_apps() {
+    echo "Installing Flatpak apps..."
+    flatpak_apps=(org.mozilla.firefox io.github.zen_browser.zen com.spotify.Client)
+    flatpak install -y flathub "${flatpak_apps[@]}" || echo "Error: Failed to install Flatpak apps" >>"$ERROR_LOG"
+    echo "[OK] Flatpak apps installed."
+}
 
-############################
-# 12. Brave via official script
-############################
-curl -fsS https://dl.brave.com/install.sh | sh || echo "Error: Brave install" >>"$ERROR_LOG"
-
-############################
-# 13. Flatpak essentials
-############################
-flatpak_apps=(org.mozilla.firefox io.github.zen_browser.zen com.spotify.Client)
-for app in "${flatpak_apps[@]}"; do
-    flatpak list --app | grep -q "$app" || flatpak install -y flathub "$app" || echo "Error: Flatpak $app" >>"$ERROR_LOG"
-done
-
-############################
-# Helper: install_or_fallback
-############################
+# 12. Install helper
 install_or_fallback() {
-    local pkg=$1
-    local flathub_id=$2
+    local pkg="$1"
+    local flathub_id="$2"
+    echo "Installing $pkg..."
     if rpm -q "$pkg" &>/dev/null; then
         echo "[OK] $pkg already installed."
         return
     fi
     if sudo dnf -y install "$pkg"; then
-        echo "[OK] Installed $pkg via DNF."
-        return
-    fi
-    # Only fallback if pkg does NOT exist in DNF repos
-    if [[ -n "$flathub_id" ]] && ! sudo dnf info "$pkg" &>/dev/null; then
-        echo "[INFO] Trying Flatpak: $flathub_id"
-        flatpak install -y flathub "$flathub_id" || echo "Error: $pkg/$flathub_id" >>"$ERROR_LOG"
+        echo "[OK] $pkg installed via DNF."
+    elif [[ -n "$flathub_id" ]] && ! sudo dnf info "$pkg" &>/dev/null; then
+        flatpak install -y flathub "$flathub_id" || echo "Error: Failed to install $pkg/$flathub_id" >>"$ERROR_LOG"
     else
-        echo "[ERR] $pkg exists in DNF but failed to install" >>"$ERROR_LOG"
+        echo "Error: Failed to install $pkg" >>"$ERROR_LOG"
     fi
 }
 
-############################
-# 14. Applications (no Cloudflare Warp, scrcpy is DNF only)
-############################
-packages_with_fallback=(
-    "btop;"
-    "easy-effects;com.github.wwmm.easyeffects"
-    "flatseal;com.github.tchx84.Flatseal"
-    "filelight;"
-    "virt-manager;"
-    "qemu-kvm;"
-    "gparted;"
-    "steam;com.valvesoftware.Steam"
-    "heroic-games-launcher;com.heroicgameslauncher.hgl"
-    "libreoffice;org.libreoffice.LibreOffice"
-    "pinta;org.pinta.Pinta"
-    "scrcpy;"   # DNF only, no Flatpak fallback
-    "android-tools;"
-    "gnome-extensions-app;"
-    "git;"
-    "mission-center;"   # no fallback
-    "zsh;"
-    "deja-dup;org.gnome.DejaDup"
-    "gnome-tweaks;"
-    "adw-gtk3;"
-)
+# 13. Applications list
+install_applications() {
+    echo "Installing applications..."
+    apps=(
+        "btop;"
+        "easy-effects;com.github.wwmm.easyeffects"
+        "flatseal;com.github.tchx84.Flatseal"
+        "filelight;"
+        "virt-manager;"
+        "qemu-kvm;"
+        "gparted;"
+        "steam;com.valvesoftware.Steam"
+        "heroic-games-launcher;com.heroicgameslauncher.hgl"
+        "libreoffice;org.libreoffice.LibreOffice"
+        "pinta;org.pinta.Pinta"
+        "scrcpy;"
+        "android-tools;"
+        "gnome-extensions-app;"
+        "git;"
+        "mission-center;"
+        "zsh;"
+        "deja-dup;org.gnome.DejaDup"
+        "gnome-tweaks;"
+        "adw-gtk3;"
+    )
+    for entry in "${apps[@]}"; do
+        IFS=";" read -r pkg flathub_id <<<"$entry"
+        install_or_fallback "$pkg" "$flathub_id"
+    done
+    echo "[OK] Applications installed."
+}
 
-for entry in "${packages_with_fallback[@]}"; do
-    IFS=";" read -r pkg flatpak_id <<< "$entry"
-    install_or_fallback "$pkg" "$flatpak_id"
-done
+# 14. GTK Theme & WhiteSur
+configure_theme() {
+    echo "Configuring GTK theme and WhiteSur..."
+    flatpak install -y flathub org.gtk.Gtk3theme.adw-gtk3 || echo "Error: Failed to install adw-gtk3 theme" >>"$ERROR_LOG"
+    sudo flatpak override --env=GTK_THEME=adw-gtk3 || echo "Error: Failed to set GTK theme for Flatpak" >>"$ERROR_LOG"
+    sudo flatpak override --filesystem=$HOME/.themes:ro || echo "Error: Failed to set themes filesystem for Flatpak" >>"$ERROR_LOG"
+    sudo flatpak override --filesystem=$HOME/.icons:ro || echo "Error: Failed to set icons filesystem for Flatpak" >>"$ERROR_LOG"
+    gsettings set org.gnome.desktop.interface gtk-theme "adw-gtk3" || echo "Error: Failed to set GNOME GTK theme" >>"$ERROR_LOG"
+    if [ ! -d "$HOME/.icons/WhiteSur" ] && [ ! -d "/usr/share/icons/WhiteSur" ]; then
+        git clone https://github.com/vinceliuice/WhiteSur-icon-theme.git /tmp/WhiteSur-icon-theme || echo "Error: Failed to clone WhiteSur icon theme" >>"$ERROR_LOG"
+        bash /tmp/WhiteSur-icon-theme/install.sh || echo "Error: Failed to install WhiteSur icon theme" >>"$ERROR_LOG"
+        rm -rf /tmp/WhiteSur-icon-theme || echo "Error: Failed to clean up WhiteSur temp files" >>"$ERROR_LOG"
+    fi
+    echo "[OK] Theme configured."
+}
 
-############################
-# 15. Flatpak GTK theme
-############################
-flatpak list --app | grep -q org.gtk.Gtk3theme.adw-gtk3 || flatpak install -y flathub org.gtk.Gtk3theme.adw-gtk3
-sudo flatpak override --env=GTK_THEME=adw-gtk3
-sudo flatpak override --filesystem=$HOME/.themes:ro
-sudo flatpak override --filesystem=$HOME/.icons:ro
-gsettings set org.gnome.desktop.interface gtk-theme "adw-gtk3"
+# 15. GNOME Extensions install
+install_gnome_extensions() {
+    echo "Installing GNOME extensions..."
+    GNOME_EXTENSIONS=(
+        "advanced-alt-tabi@G-dH.github.com"
+        "AlphabeticalAppGrid@SofianGoudes.github.com"
+        "alt-tab-current-monitor@esauvisky.github.io"
+        "appindicatorsupport@rgcjonas.gmail.com"
+        "arch-update@RaphaelRochet"
+        "aromenu@arcmenu.com"
+        "Battery-Health-Charging@imaniacx.github.com"
+        "Bluetooth-Battery-Meter@maniacs.github.com"
+        "blur-my-shell@aunetx"
+        "caffeine@patapon.info"
+        "cloudflare-warp-toggle@khaled.is-a.dev"
+        "monitor-brightness-volume@allin.nemul"
+        "dash-to-dock@micxgx.gmail.com"
+        "fullscreen-avoider@noobsal.github.com"
+        "gsconnect@andyholmes.github.io"
+        "gtk4-ding@smedius.gitlab.com"
+        "just-perfection-desktop@just-perfection"
+        "legacyschemeautoswitcher@joshimukul29.gmail.com"
+        "mediacontrols@cliffniff.github.com"
+        "notification-banner-reloaded@marcinjakubowski.github.com"
+        "quick-settings-tweaks@qwreey"
+        "rounded-window-corners@fxgn"
+        "tiling-assistant@leleat-on-github"
+        "window-title-is-back@fthx"
+        "xwayland-indicator@swsnr.de"
+    )
+    install_gnome_extension() {
+        local uuid="$1"
+        ext_id=$(curl -s "https://extensions.gnome.org/extension-query/?search=${uuid%%@*}" | grep -o "\"pk\": *[0-9]*" | head -n1 | tr -dc '0-9')
+        if [ -z "$ext_id" ]; then
+            echo "Error: No ID found for $uuid" >>"$ERROR_LOG"
+            return
+        fi
+        shell_ver=$(gnome-shell --version | awk '{print $3}')
+        dl_url=$(curl -s "https://extensions.gnome.org/extension-info/?pk=$ext_id&shell_version=$shell_ver" | grep -o '"download_url": *"[^"]*"' | cut -d'"' -f4)
+        if [ -z "$dl_url" ]; then
+            echo "Error: No download URL for $uuid" >>"$ERROR_LOG"
+            return
+        fi
+        tmpzip="/tmp/${uuid}.zip"
+        curl -sL "https://extensions.gnome.org${dl_url}" -o "$tmpzip" || echo "Error: Failed to download $uuid" >>"$ERROR_LOG"
+        gnome-extensions install "$tmpzip" --force || echo "Error: Failed to install $uuid" >>"$ERROR_LOG"
+        rm -f "$tmpzip" || echo "Error: Failed to clean up $uuid zip" >>"$ERROR_LOG"
+        gnome-extensions enable "$uuid" || echo "Error: Failed to enable $uuid" >>"$ERROR_LOG"
+    }
+    for ext in "${GNOME_EXTENSIONS[@]}"; do
+        gnome-extensions info "$ext" &>/dev/null || install_gnome_extension "$ext"
+    done
+    echo "[OK] GNOME extensions installed."
+}
 
-############################
-# 16. WhiteSur Icons (no --alt)
-############################
-if [ ! -d "$HOME/.icons/WhiteSur" ] && [ ! -d "/usr/share/icons/WhiteSur" ]; then
-    git clone https://github.com/vinceliuice/WhiteSur-icon-theme.git /tmp/WhiteSur-icon-theme
-    bash /tmp/WhiteSur-icon-theme/install.sh
-    rm -rf /tmp/WhiteSur-icon-theme
-fi
+# 16. GNOME Shortcuts
+configure_shortcuts() {
+    echo "Configuring GNOME shortcuts..."
+    base="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings"
+    declare -A keys=(
+        ["custom-terminal"]="<Control><Alt>t|gnome-terminal"
+        ["custom-settings"]="<Super>i|gnome-control-center"
+        ["custom-monitor"]="<Control><Shift>Escape|gnome-system-monitor"
+        ["custom-hide"]="<Super>m|xdotool key super+d"
+        ["custom-screenshot"]="<Super><Shift>s|gnome-screenshot --interactive"
+    )
+    current_keys=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
+    for k in "${!keys[@]}"; do
+        path="$base/$k/"
+        if [[ "$current_keys" != *"$path"* ]]; then
+            current_keys=$(echo "$current_keys" | sed "s/]$/, '$path']/")
+        fi
+        IFS="|" read -r combo cmd <<< "${keys[$k]}"
+        gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" name "$k" || echo "Error: Failed to set name for $k shortcut" >>"$ERROR_LOG"
+        gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" binding "$combo" || echo "Error: Failed to set binding for $k shortcut" >>"$ERROR_LOG"
+        gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" command "$cmd" || echo "Error: Failed to set command for $k shortcut" >>"$ERROR_LOG"
+    done
+    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$current_keys" || echo "Error: Failed to set custom keybindings" >>"$ERROR_LOG"
+    echo "[OK] GNOME shortcuts configured."
+}
 
-############################
-# 17. Neofetch
-############################
-if ! command -v neofetch &>/dev/null; then
-    curl -L https://github.com/dylanaraps/neofetch/releases/latest/download/neofetch -o /tmp/neofetch
-    chmod +x /tmp/neofetch
-    sudo mv /tmp/neofetch /usr/bin/neofetch
-fi
+# 17. Spicetify for Spotify Flatpak
+configure_spicetify() {
+    echo "Configuring Spicetify for Spotify..."
+    if ! command -v spicetify &>/dev/null; then
+        sudo npm install -g spicetify-cli || echo "Error: Failed to install Spicetify (ensure npm is installed)" >>"$ERROR_LOG"
+    fi
+    if command -v spicetify &>/dev/null; then
+        spicetify config current_user_modify true || echo "Error: Failed to set Spicetify user modify" >>"$ERROR_LOG"
+        spicetify config spotify_path "$HOME/.var/app/com.spotify.Client" || echo "Error: Failed to set Spicetify Spotify path" >>"$ERROR_LOG"
+        spicetify apply || echo "Error: Failed to apply Spicetify" >>"$ERROR_LOG"
+    fi
+    echo "[OK] Spicetify configured."
+}
 
-############################
-# 18. GNOME Shortcuts
-############################
-base="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings"
-declare -A keys=(
-    ["custom-terminal"]="<Control><Alt>t|gnome-terminal"
-    ["custom-settings"]="<Super>i|gnome-control-center"
-    ["custom-monitor"]="<Control><Shift>Escape|gnome-system-monitor"
-    ["custom-hide"]="<Super>m|xdotool key super+d"
-    ["custom-screenshot"]="<Super><Shift>s|gnome-screenshot --interactive"
-)
-current_keys=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
-for k in "${!keys[@]}"; do
-    path="$base/$k/"
-    [[ "$current_keys" != *"$path"* ]] && current_keys=$(echo "$current_keys" | sed "s/]$/, '$path']/")
-    IFS="|" read -r combo cmd <<< "${keys[$k]}"
-    gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" name "$k"
-    gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" binding "$combo"
-    gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$path" command "$cmd"
-done
-gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$current_keys"
+# 18. Zsh + Oh My Zsh
+configure_zsh() {
+    echo "Configuring Zsh and Oh My Zsh..."
+    if ! command -v zsh &>/dev/null; then
+        sudo dnf -y install zsh || echo "Error: Failed to install Zsh" >>"$ERROR_LOG"
+    fi
+    if [ ! -d "$HOME/.oh-my-zsh" ]; then
+        RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" || echo "Error: Failed to install Oh My Zsh" >>"$ERROR_LOG"
+    fi
+    if [ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-autosuggestions" ]; then
+        git clone https://github.com/zsh-users/zsh-autosuggestions "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions" || echo "Error: Failed to install zsh-autosuggestions" >>"$ERROR_LOG"
+    fi
+    if [ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" ]; then
+        git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" || echo "Error: Failed to install zsh-syntax-highlighting" >>"$ERROR_LOG"
+    fi
+    sed -i "s|^ZSH_THEME=.*|ZSH_THEME=\"darkblood\"|" ~/.zshrc || echo "Error: Failed to set Zsh theme" >>"$ERROR_LOG"
+    sed -i "s|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|" ~/.zshrc || echo "Error: Failed to set Zsh plugins" >>"$ERROR_LOG"
+    echo "[OK] Zsh and Oh My Zsh configured."
+}
 
-############################
-# 19. Spicetify for Spotify Flatpak
-############################
-if ! command -v spicetify &>/dev/null; then
-    sudo npm install -g spicetify-cli || echo "⚠ npm not installed" >>"$ERROR_LOG"
-fi
-if command -v spicetify &>/dev/null; then
-    spicetify config current_user_modify true
-    spicetify config spotify_path "$HOME/.var/app/com.spotify.Client"
-    spicetify apply
-fi
+# 19. Display Error Summary
+display_error_summary() {
+    echo "Checking for errors..."
+    if [ -s "$ERROR_LOG" ]; then
+        echo "⚠ Errors occurred during setup. See details below:"
+        cat "$ERROR_LOG"
+    else
+        echo "✅ No errors detected."
+    fi
+}
 
-############################
-# 20. Zsh + Oh My Zsh
-############################
-if ! command -v zsh &>/dev/null; then
-    sudo dnf -y install zsh
-fi
-if [ ! -d "$HOME/.oh-my-zsh" ]; then
-    RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-fi
-[ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-autosuggestions" ] &&
-    git clone https://github.com/zsh-users/zsh-autosuggestions "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions"
-[ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting" ] &&
-    git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting"
-sed -i "s|^ZSH_THEME=.*|ZSH_THEME=\"darkblood\"|" ~/.zshrc
-sed -i "s|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|" ~/.zshrc
+# Execute all steps
+check_prerequisites
+configure_dnf
+install_rpm_fusion
+upgrade_core
+install_media_codecs
+install_openh264
+configure_system
+setup_flathub
+remove_firefox
+install_vscode
+install_brave
+install_flatpak_apps
+install_applications
+configure_theme
+install_gnome_extensions
+configure_shortcuts
+configure_spicetify
+configure_zsh
 
-############################
-# Done
-############################
+# Display completion and error summary
 echo "✅ Post-install setup complete."
-echo "Check $ERROR_LOG for any errors."
+display_error_summary
