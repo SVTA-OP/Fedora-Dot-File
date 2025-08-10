@@ -75,15 +75,8 @@ for app in "${flatpak_apps[@]}"; do
     flatpak list --app | grep -q "$app" || flatpak install -y flathub "$app"
 done
 
-## --- 12. Install Brave browser (correct way) ---
-if ! command -v brave-browser &>/dev/null; then
-    sudo dnf install -y dnf-plugins-core
-    # sudo dnf config-manager --addrepo=https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo
-    sudo rpm --import https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
-    sudo dnf install -y brave-browser
-else
-    echo "Brave browser already installed."
-fi
+# brave install:
+curl -fsS https://dl.brave.com/install.sh | sh
 
 ## --- 13. Packages (DNF first, then Flatpak if available) ---
 dnf_or_flatpak_pkgs=(
