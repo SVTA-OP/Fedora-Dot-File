@@ -19,23 +19,18 @@ if ! rpm -q rpmfusion-free-release &>/dev/null || ! rpm -q rpmfusion-nonfree-rel
         https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
 fi
 
-## --- 3. Enable Terra repo ---
-if ! rpm -q terra-release &>/dev/null; then
-    sudo dnf install --nogpgcheck --repofrompath 'terra,https://repos.fyralabs.com/terra$releasever' terra-release
-fi
-
-## --- 4. AppStream & Core Group ---
+## --- 3. AppStream & Core Group ---
 sudo dnf group upgrade -y core
 sudo dnf4 group install -y core
 
-## --- 5. Media Codecs ---
+## --- 4. Media Codecs ---
 sudo dnf4 group install -y multimedia
 sudo dnf swap -y 'ffmpeg-free' 'ffmpeg' --allowerasing
 sudo dnf upgrade -y @multimedia --setopt="install_weak_deps=False" \
     --exclude=PackageKit-gstreamer-plugin
 sudo dnf group install -y sound-and-video
 
-## --- 6. Hardware Video Acceleration ---
+## --- 5. Hardware Video Acceleration ---
 sudo dnf install -y ffmpeg-libs libva libva-utils
 cpu_vendor=$(lscpu | grep 'Vendor ID' | awk '{print $3}')
 if [[ "$cpu_vendor" == "GenuineIntel" ]]; then
@@ -48,29 +43,29 @@ elif [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
     sudo dnf swap -y mesa-vdpau-drivers.i686 mesa-vdpau-drivers-freeworld.i686
 fi
 
-## --- 7. OpenH264 for Firefox ---
+## --- 6. OpenH264 for Firefox ---
 sudo dnf install -y openh264 gstreamer1-plugin-openh264 mozilla-openh264
 sudo dnf config-manager setopt fedora-cisco-openh264.enabled=1
 
-## --- 8. Hostname & disable services ---
+## --- 7. Hostname & disable services ---
 sudo hostnamectl set-hostname vivobook-s14-m5406w
 sudo systemctl disable NetworkManager-wait-online.service
 sudo rm -f /etc/xdg/autostart/org.gnome.Software.desktop
 
-## --- 9. System update ---
+## --- 8. System update ---
 sudo dnf -y update
 
-## --- 10. Flathub ---
+## --- 9. Flathub ---
 if ! flatpak remote-list | grep -q flathub; then
     flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 fi
 
-## --- 11. Remove RPM Firefox ---
+## --- 10. Remove RPM Firefox ---
 if rpm -q firefox &>/dev/null; then
     sudo dnf -y remove firefox
 fi
 
-## --- 12. Flatpak apps ---
+## --- 11. Flatpak apps ---
 flatpak_apps=(
     org.mozilla.firefox
     io.github.zen_browser.zen
@@ -80,15 +75,44 @@ for app in "${flatpak_apps[@]}"; do
     flatpak list --app | grep -q "$app" || flatpak install -y flathub "$app"
 done
 
-## --- 13. Packages ---
+## --- 12. Install Brave browser (correct way) ---
+if ! command -v brave-browser &>/dev/null; then
+    sudo dnf install -y dnf-plugins-core
+    sudo dnf config-manager --add-repo https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo
+    sudo rpm --import https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
+    sudo dnf install -y brave-browser
+else
+    echo "Brave browser already installed."
+fi
+
+## --- 13. Packages (DNF first, then Flatpak if available) ---
 dnf_or_flatpak_pkgs=(
-    brave-browser btop cloudflare-warp easy-effects flatseal filelight virt-manager
-    qemu-kvm gparted steam heroic libreoffice pinta scrcpy android-tools
-    protonvpn warp-terminal gnome-extensions-app git code mission-center
-    zsh deja-dup gnome-tweaks adw-gtk3
+    btop
+    cloudflare-warp
+    easy-effects
+    flatseal
+    filelight
+    virt-manager
+    qemu-kvm
+    gparted
+    steam
+    heroic-games-launcher
+    libreoffice
+    pinta
+    scrcpy
+    android-tools
+    protonvpn
+    gnome-extensions-app
+    git
+    code
+    mission-center
+    zsh
+    deja-dup
+    gnome-tweaks
+    adw-gtk3
 )
 for pkg in "${dnf_or_flatpak_pkgs[@]}"; do
-    rpm -q "$pkg" &>/dev/null || sudo dnf -y install "$pkg" || flatpak install -y flathub "$pkg"
+    rpm -q "$pkg" &>/dev/null || sudo dnf -y install "$pkg" || flatpak install -y flathub "$pkg" || echo "❌ Could not install $pkg"
 done
 
 ## --- 14. Flatpak GTK theme ---
